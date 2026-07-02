@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "rag-engine"
+version = "0.1.0"
+description = "RAG Engine - LangGraph orchestrator for E-Commerce AI"
+authors = ["Author <author@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "*"
+uvicorn = "*"
+langgraph = "*"
+sentence-transformers = "*"
+qdrant-client = "*"
+sqlalchemy = "*"
+psycopg2-binary = "*"
+httpx = "*"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

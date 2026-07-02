@@ -1,4 +1,10 @@
+"""
+Database connection configuration.
+Reads all connection parameters from environment variables with
+sensible localhost defaults for local development.
+"""
 import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -15,7 +21,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+
 def get_db():
+    """Yields a database session and ensures it is closed after use."""
     db = SessionLocal()
     try:
         yield db

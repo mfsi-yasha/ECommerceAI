@@ -1,11 +1,13 @@
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Dict, Any, Optional
+"""
+Pydantic schemas for API request/response validation and serialization.
+"""
+from typing import Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class ProductSchema(BaseModel):
-    """
-    Pydantic schema representing the structure of a product returned by the API.
-    Used for serialization and type validation.
-    """
+    """Represents a product returned by the API, including its key-value metadata."""
     id: int
     name: str
     type: Optional[str] = None
@@ -14,34 +16,27 @@ class ProductSchema(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class SearchResponse(BaseModel):
-    """
-    Pydantic schema for the response payload of the /api/search endpoint.
-    Includes the AI's textual response and a list of hydrated product objects.
-    """
+    """Response payload for the /api/search endpoint with the AI response and product list."""
     ai_response: str
     products: List[ProductSchema]
 
+
 class SearchRequest(BaseModel):
-    """
-    Pydantic schema for the incoming search request body (if used in a POST endpoint).
-    """
+    """Incoming search request body containing the user's query and their session ID."""
     query: str
     session_id: str
 
+
 class ChatMessage(BaseModel):
-    """
-    Pydantic schema representing a single formatted chat message in the chat history.
-    Optionally contains a list of hydrated products if the sender was the agent.
-    """
+    """A single message in the conversation, optionally including products if sent by the agent."""
     role: str
     message: str
     products: Optional[List[ProductSchema]] = None
 
+
 class ChatHistoryResponse(BaseModel):
-    """
-    Pydantic schema for the response payload of the /api/chat endpoint.
-    Contains the session ID and the full reconstructed conversation history.
-    """
+    """Response payload for the /api/chat endpoint containing the full conversation history."""
     session_id: str
     history: List[ChatMessage]

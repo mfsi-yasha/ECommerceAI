@@ -42,7 +42,7 @@ def load_chat_history(session_id):
     including appending dynamic product Markdown cards to the agent's textual response.
     """
     if not session_id:
-        return []
+        return [], ""
     try:
         response = requests.get(f"{BACKEND_URL}/api/chat/{session_id}", timeout=5)
         response.raise_for_status()
@@ -60,9 +60,9 @@ def load_chat_history(session_id):
                 
                 final_response = f"{ai_text}{product_md}"
                 chat_history.append({"role": "assistant", "content": final_response})
-        return chat_history
+        return chat_history, session_id
     except Exception as e:
-        return []
+        return [], session_id
 
 def search(query, history, session_id):
     """
@@ -103,7 +103,7 @@ with gr.Blocks() as demo:
     gr.Markdown("# E-Commerce AI Assistant")
     
     chatbot = gr.Chatbot(label="Chat History")
-    session_id = gr.BrowserState("", storage_key="ecommerce_session_id", secret="ecommerce_secret_key_123")
+    session_id = gr.BrowserState("", storage_key="ecommerce_session_id")
     
     with gr.Row():
         msg = gr.Textbox(label="Type your message...", placeholder="Search for products...", scale=4)
@@ -113,9 +113,9 @@ with gr.Blocks() as demo:
 
     msg.submit(search, [msg, chatbot, session_id], [chatbot, msg, session_id])
     send.click(search, [msg, chatbot, session_id], [chatbot, msg, session_id])
-    clear.click(lambda: ([], ""), None, [chatbot, session_id], queue=False)
+    clear.click(lambda: ([], "", str(uuid.uuid4())), None, [chatbot, msg, session_id])
     
-    demo.load(load_chat_history, inputs=[session_id], outputs=[chatbot])
+    demo.load(load_chat_history, inputs=[session_id], outputs=[chatbot, session_id])
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=8001, theme=gr.themes.Default(primary_hue="blue"))

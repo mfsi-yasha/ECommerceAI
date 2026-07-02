@@ -1,4 +1,7 @@
 services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 1. PostgreSQL — Persistent storage for products, metadata, and chat logs
+  # ═══════════════════════════════════════════════════════════════════════════
   postgres_db:
     image: postgres:17-alpine
     container_name: ecommerce_postgres
@@ -20,6 +23,97 @@ services:
     networks:
       - ecommerce_net
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 2. Qdrant — Vector database for semantic product search
+  # ═══════════════════════════════════════════════════════════════════════════
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: ecommerce_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - ecommerce_net
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 3. LLM Server (Ollama) — Inference engine for text generation
+  #    Uses Ollama for development: works on Apple Silicon, Intel, and NVIDIA.
+  #    Exposes an OpenAI-compatible API at /v1/chat/completions.
+  # ═══════════════════════════════════════════════════════════════════════════
+  llm_server:
+    build:
+      dockerfile_inline: |
+        FROM ollama/ollama:latest
+        ARG LLM_MODEL=phi3
+        RUN ollama serve & sleep 5 && ollama pull $${LLM_MODEL} && pkill ollama
+      args:
+        LLM_MODEL: ${LLM_MODEL}
+    container_name: ecommerce_llm
+    restart: unless-stopped
+    environment:
+      - OLLAMA_NUM_CTX=1024
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - ecommerce_net
+    # ── NVIDIA GPU support (uncomment if you have nvidia-container-toolkit) ──
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 4. RAG Engine — LangGraph orchestrator (The Brain)
+  # ═══════════════════════════════════════════════════════════════════════════
+  rag_engine:
+    build:
+      context: ./rag_engine
+      dockerfile: Dockerfile
+    container_name: ecommerce_rag_engine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: postgres_db
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      LLM_HOST: llm_server
+      LLM_PORT: 11434
+      LLM_MODEL: ${LLM_MODEL}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
+    ports:
+      - "8002:8002"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      llm_server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - ecommerce_net
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 5. Backend (FastAPI) — API Gateway (Delegator & Hydrator)
+  # ═══════════════════════════════════════════════════════════════════════════
   backend:
     build:
       context: ./backend
@@ -30,9 +124,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_HOST: postgres_db
       POSTGRES_PORT: ${POSTGRES_PORT}
       APP_ENV: ${APP_ENV}
+      RAG_ENGINE_URL: http://rag_engine:8002
     ports:
       - "8000:8000"
     depends_on:
@@ -47,6 +142,9 @@ services:
     networks:
       - ecommerce_net
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 6. Frontend (Gradio) — Chat UI
+  # ═══════════════════════════════════════════════════════════════════════════
   frontend:
     build:
       context: ./frontend
@@ -60,6 +158,9 @@ services:
     networks:
       - ecommerce_net
 
+  # ═══════════════════════════════════════════════════════════════════════════
+  # 7. Nginx — Reverse Proxy
+  # ═══════════════════════════════════════════════════════════════════════════
   nginx_proxy:
     image: nginx:1-alpine
     container_name: ecommerce_nginx
@@ -76,8 +177,17 @@ services:
     networks:
       - ecommerce_net
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Named Volumes — persist data across container restarts
+# ═══════════════════════════════════════════════════════════════════════════════
 volumes:
   postgres_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  ollama_data:
+    driver: local
+  hf_cache:
     driver: local
 
 networks:

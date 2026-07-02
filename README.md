@@ -1,38 +1,52 @@
 # E-Commerce AI System
 
-A scalable, production-grade, RAG (Retrieval-Augmented Generation) e-commerce assistant. This project utilizes a microservices architecture to ensure high availability, fault tolerance, and independent scalability of AI inference, retrieval, and gateway services.
+A scalable, production-grade e-commerce shopping assistant powered by Retrieval-Augmented Generation (RAG). Built on a microservices architecture with independent services for the UI, API Gateway, AI orchestration, vector search, and LLM inference.
 
 ## 🏗️ System Architecture
 
 ![System Design Diagram](./docs/ECommerceAISystemDesign.jpg)
 
-This system decouples the UI, API Gateway, and AI logic to prevent bottlenecks. The API Gateway manages session logging and traffic, while the dedicated RAG Engine (Phase 2) will manage context retrieval and orchestration.
+The UI, API Gateway, and AI logic are fully decoupled so each service can scale independently without creating bottlenecks. The API Gateway manages session logging and request routing, while the RAG Engine orchestrates context retrieval and AI response generation.
 
-### Current Core Components (Phase 1)
-1. **Nginx:** Reverse Proxy for load balancing and routing (ports 80).
-2. **Frontend (Gradio 5+):** The modern Chat UI (`/frontend`).
-3. **Backend (FastAPI):** API Gateway handling session validation, logging, and routing (`/backend`).
-4. **PostgreSQL 17:** Persistent storage for product metadata and chat logs.
+### Core Components (7-Container Stack)
 
-### Upcoming Components (Phase 2)
-5. **RAG Engine:** LangGraph orchestrator for context retrieval and prompt construction.
-6. **Qdrant:** High-performance Vector Database for semantic search.
-7. **vLLM:** GPU-optimized inference engine for LLM text generation.
+1. **Nginx** — Reverse proxy for routing and load balancing (port 80).
+2. **Frontend (Gradio 5+)** — Chat-based shopping UI.
+3. **Backend (FastAPI)** — API Gateway that handles session management, request delegation, and product data hydration.
+4. **PostgreSQL 17** — Persistent storage for the product catalog, metadata, and chat logs.
+5. **RAG Engine** — LangGraph-based orchestrator for query understanding, semantic retrieval, ranking, and AI response generation.
+6. **Qdrant** — High-performance vector database for semantic product search.
+7. **Ollama** — Hardware-agnostic LLM inference engine running Microsoft Phi-3.
 
 ---
 
 ## 📂 Project Structure
 
-The project is organized into modular containers to support independent scaling and deployment.
-
 ```text
 ECommerceAI/
-├── docker-compose.yml        # Orchestration for the stack
+├── docker-compose.yml        # Orchestration for the 7-container stack
 ├── Makefile                  # Helper commands for local development
-├── frontend/                 # Gradio Chat UI Service
-├── backend/                  # FastAPI Gateway Service (Auth/Logging/Routing)
-├── nginx/                    # Nginx Configuration
-└── docs/                     # Architectural documentation
+├── .env                      # Environment variables (localhost defaults)
+├── frontend/                 # Gradio Chat UI
+├── backend/                  # FastAPI API Gateway
+│   └── app/
+│       ├── main.py           #   Route handlers and RAG Engine delegation
+│       ├── database.py       #   SQLAlchemy engine and session factory
+│       ├── models.py         #   ORM models (Product, ProductMetadata, ChatHistory)
+│       ├── schemas.py        #   Pydantic request/response schemas
+│       └── repositories.py   #   Database query layer
+├── rag_engine/               # RAG Engine (AI Brain)
+│   ├── app/
+│   │   ├── main.py           #   FastAPI server exposing /rag/query
+│   │   ├── config.py         #   Environment-based configuration
+│   │   ├── hardware.py       #   CUDA / MPS / CPU auto-detection
+│   │   ├── graph.py          #   LangGraph pipeline assembly
+│   │   ├── nodes/            #   Pipeline nodes (parser, retriever, ranker, responder)
+│   │   └── clients/          #   Service clients (Qdrant, Postgres, Ollama)
+│   └── scripts/
+│       └── sync_vectors.py   #   Syncs product data from Postgres → Qdrant
+├── nginx/                    # Nginx configuration
+└── docs/                     # Architecture diagrams
 ```
 
 ---
@@ -42,68 +56,111 @@ ECommerceAI/
 ### Prerequisites
 
 - **Docker & Docker Compose**
-- **Python 3.12+** (For running local commands/tests)
-- **Poetry** (For dependency management)
+- **Python 3.12+** (for local commands and tests)
+- **Poetry** (for dependency management)
 
-### Helper Commands (Makefile)
-
-We use a `Makefile` to simplify local development and deployment. 
+### Makefile Commands
 
 ```bash
-# Spin up the entire Docker stack in detached mode
-make up
-
-# Spin down the Docker stack (preserves database volumes)
-make down
-
-# Rebuild the Docker containers from scratch
-make build
-
-# Run the test suite in the backend
-make test
-
-# Manually trigger Alembic migrations (runs automatically on boot)
-make migrate
-
-# Seed the Postgres database with 20 mock products
-make seed
+make up              # Build and start all 7 containers
+make down            # Stop all containers (preserves volumes)
+make build           # Rebuild Docker images
+make test            # Run the backend test suite
+make migrate         # Run Alembic database migrations
+make seed            # Seed the database with sample products
+make sync-vectors    # Sync product vectors from Postgres to Qdrant (locally)
 ```
 
-### Initial Setup & Deployment
+### Initial Setup
 
 1. **Start the containers:**
+
    ```bash
    make up
    ```
-   *Note: The backend container automatically runs database migrations (`alembic upgrade head`) on startup.*
 
-2. **Seed the database (Optional but recommended):**
+   _The backend automatically runs database migrations on startup._
+
+2. **Seed the database:**
+
    ```bash
    make seed
    ```
 
-3. **Access the Application:**
-   - **Frontend UI:** [http://localhost](http://localhost)
-   - **Backend API Docs:** [http://localhost/api/docs](http://localhost/api/docs)
+3. **Sync product vectors to Qdrant:**
+
+   ```bash
+   docker exec ecommerce_rag_engine python scripts/sync_vectors.py
+   ```
+
+4. **Open the application:**
+   - **Chat UI:** [http://localhost](http://localhost)
+   - **API Docs:** [http://localhost/api/docs](http://localhost/api/docs)
+
+---
+
+## 🧠 RAG Pipeline
+
+The RAG Engine uses a 4-node [LangGraph](https://langchain-ai.github.io/langgraph/) pipeline to process every user query:
+
+```
+User Query → [Parse] → [Retrieve] → [Rank] → [Respond] → {ai_response, product_ids}
+```
+
+| Node         | What it does                                                                                                                                    |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Parse**    | Extracts structured exact-match metadata filters (brand, type, subtype, price range) from the query using the LLM                               |
+| **Retrieve** | Embeds the query → searches Qdrant with exact metadata filters (strict match) and semantic scoring (0.3 threshold) → falls back to Postgres SQL |
+| **Rank**     | Caps results at 10 and classifies the outcome (shortage / overflow / empty / normal)                                                            |
+| **Respond**  | Drafts a conversational AI response via the LLM, with resilient JSON fallback if offline                                                        |
+
+### Inventory & Pagination Rules
+
+- **Default:** Maximum 10 products per response.
+- **Shortage:** Fewer matches than requested — acknowledges the limited selection.
+- **Overflow:** More matches than the cap — shows the top results and offers to show more.
+- **Empty:** No matches — suggests broadening the search.
 
 ---
 
 ## 🗄️ Database Schema
 
+The schema is managed with **Alembic** migrations and defined in **SQLAlchemy** ORM models ([models.py](./backend/app/models.py)).
+
 ![ER Diagram](./docs/ERDiagram.jpg)
 
-The schema is managed via **Alembic** migrations and **SQLAlchemy** ORM models located in `backend/app/models.py`.
+| Table                | Purpose                                                         |
+| -------------------- | --------------------------------------------------------------- |
+| **products**         | Core product catalog with category type and subtype.            |
+| **product_metadata** | Flexible key-value pairs (brand, price, color, specs, etc.).    |
+| **chat_history**     | Conversation log keyed by UUID session ID for history playback. |
 
-- **Products:** Catalog storage with auto-increment IDs.
-- **Product Metadata:** Separated for efficient RAG lookups.
-- **Chat History:** Partitioned for context window retrieval.
+---
+
+## ⚙️ Hardware Agnostic
+
+The system automatically detects and uses the best available compute hardware:
+
+| Environment            | Compute | Notes                               |
+| ---------------------- | ------- | ----------------------------------- |
+| NVIDIA GPU (Docker)    | CUDA    | Requires `nvidia-container-toolkit` |
+| Apple Silicon (native) | MPS     | For local execution outside Docker  |
+| Apple Silicon (Docker) | CPU     | Docker runs ARM64 Linux, no Metal   |
+| Intel/AMD              | CPU     | Universal fallback                  |
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Backend:** FastAPI (Python 3.12), SQLAlchemy, Alembic
-- **Dependency Management:** Poetry
-- **Frontend:** Gradio 5+
-- **Database:** PostgreSQL 17
-- **Infrastructure:** Docker, Nginx, Make
+| Layer           | Technology                                      |
+| --------------- | ----------------------------------------------- |
+| Frontend        | Gradio 6+                                       |
+| API Gateway     | FastAPI, SQLAlchemy, Alembic                    |
+| RAG Engine      | LangGraph, Sentence-Transformers, Qdrant Client |
+| LLM             | Ollama (Microsoft Phi-3), OpenAI-compatible API |
+| Database        | PostgreSQL 17                                   |
+| Vector Database | Qdrant                                          |
+| Dependencies    | Poetry                                          |
+| Infrastructure  | Docker, Nginx, Make                             |
+
+---

@@ -1,21 +1,26 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
-from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
-from .database import Base
+"""
+SQLAlchemy ORM models for the e-commerce database.
+Defines the Products, ProductMetadata, and ChatHistory tables.
+"""
 import enum
 
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
+from .database import Base
+
+
 class RoleEnum(str, enum.Enum):
-    """
-    Enumeration representing the sender of a chat message.
-    Can be either 'user' or 'agent'.
-    """
+    """Represents the sender of a chat message: either 'user' or 'agent'."""
     user = "user"
     agent = "agent"
 
+
 class Product(Base):
     """
-    SQLAlchemy model representing an e-commerce product.
-    Contains basic attributes like name, type, subtype, and a relationship to its metadata.
+    Represents an e-commerce product with a name, category type, and subtype.
+    Related metadata is stored separately in the ProductMetadata table.
     """
     __tablename__ = "products"
 
@@ -27,10 +32,11 @@ class Product(Base):
 
     metadata_items = relationship("ProductMetadata", back_populates="product", cascade="all, delete-orphan")
 
+
 class ProductMetadata(Base):
     """
-    SQLAlchemy model representing key-value metadata for a specific product.
-    Links back to the Product model via a foreign key.
+    Stores key-value metadata pairs for a product (e.g. brand, price, color).
+    Linked to a parent Product via foreign key.
     """
     __tablename__ = "product_metadata"
 
@@ -41,10 +47,13 @@ class ProductMetadata(Base):
 
     product = relationship("Product", back_populates="metadata_items")
 
+
 class ChatHistory(Base):
     """
-    SQLAlchemy model representing a single chat message in a conversation session.
-    Logs the session ID, role (user/agent), raw message content, and timestamp.
+    Logs a single chat message within a conversation session.
+    The session_id is a UUID string that groups messages belonging to
+    the same conversation. Role indicates whether the sender was the
+    user or the AI agent.
     """
     __tablename__ = "chat_history"
 

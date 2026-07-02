@@ -1,4 +1,4 @@
-.PHONY: migrate seed test build up down
+.PHONY: migrate seed test build up down sync-vectors
 
 migrate:
 	cd backend && POSTGRES_HOST=localhost poetry run alembic upgrade head
@@ -17,3 +17,6 @@ up:
 
 down:
 	docker-compose down
+
+sync-vectors:
+	cd rag_engine && POSTGRES_HOST=localhost QDRANT_HOST=localhost poetry run python scripts/sync_vectors.py

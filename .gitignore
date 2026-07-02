@@ -5,8 +5,13 @@ __pycache__/
 venv/
 .env
 
-# Docker
+# Docker volumes
 postgres_data/
+qdrant_data/
+ollama_data/
+
+# Model cache
+hf_cache/
 
 # IDEs
 .vscode/
