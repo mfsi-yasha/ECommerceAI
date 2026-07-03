@@ -1,6 +1,6 @@
 # E-Commerce AI System
 
-A scalable, production-grade e-commerce shopping assistant powered by Retrieval-Augmented Generation (RAG). Built on a microservices architecture with independent services for the UI, API Gateway, AI orchestration, vector search, and LLM inference.
+A scalable, production-grade e-commerce shopping assistant powered by an **Agentic RAG** architecture. Built on a microservices architecture with independent services for the UI, API Gateway, AI orchestration, vector search, and LLM inference. The agent autonomously decides which tools to call (product search, calculator) based on the user's query.
 
 ## 🏗️ System Architecture
 
@@ -11,12 +11,12 @@ The UI, API Gateway, and AI logic are fully decoupled so each service can scale 
 ### Core Components (7-Container Stack)
 
 1. **Nginx** — Reverse proxy for routing and load balancing (port 80).
-2. **Frontend (Gradio 5+)** — Chat-based shopping UI.
+2. **Frontend (Gradio 6+)** — Chat-based shopping UI.
 3. **Backend (FastAPI)** — API Gateway that handles session management, request delegation, and product data hydration.
 4. **PostgreSQL 17** — Persistent storage for the product catalog, metadata, and chat logs.
-5. **RAG Engine** — LangGraph-based orchestrator for query understanding, semantic retrieval, ranking, and AI response generation.
+5. **RAG Engine** — LangGraph ReAct Agent with tool-calling capabilities for autonomous product search and calculations.
 6. **Qdrant** — High-performance vector database for semantic product search.
-7. **Ollama** — Hardware-agnostic LLM inference engine running Microsoft Phi-3.
+7. **Ollama** — Hardware-agnostic LLM inference engine running **Llama 3.2** (local mode).
 
 ---
 
@@ -40,9 +40,9 @@ ECommerceAI/
 │   │   ├── main.py           #   FastAPI server exposing /rag/query
 │   │   ├── config.py         #   Environment-based configuration
 │   │   ├── hardware.py       #   CUDA / MPS / CPU auto-detection
-│   │   ├── graph.py          #   LangGraph pipeline assembly
-│   │   ├── nodes/            #   Pipeline nodes (parser, retriever, ranker, responder)
-│   │   └── clients/          #   Service clients (Qdrant, Postgres, Ollama)
+│   │   ├── graph.py          #   LangGraph ReAct agent builder
+│   │   ├── tools.py          #   Agent tools (product search, calculator)
+│   │   └── clients/          #   Service clients (Qdrant, Postgres, LLM factory)
 │   └── scripts/
 │       └── sync_vectors.py   #   Syncs product data from Postgres → Qdrant
 ├── nginx/                    # Nginx configuration
@@ -58,6 +58,7 @@ ECommerceAI/
 - **Docker & Docker Compose**
 - **Python 3.12+** (for local commands and tests)
 - **Poetry** (for dependency management)
+- **Groq API Key** _(optional, free at [console.groq.com](https://console.groq.com))_ — for cloud LLM mode
 
 ### Makefile Commands
 
@@ -90,7 +91,7 @@ make sync-vectors    # Sync product vectors from Postgres to Qdrant (locally)
 3. **Sync product vectors to Qdrant:**
 
    ```bash
-   docker exec ecommerce_rag_engine python scripts/sync_vectors.py
+   make sync-vectors
    ```
 
 4. **Open the application:**
@@ -99,27 +100,37 @@ make sync-vectors    # Sync product vectors from Postgres to Qdrant (locally)
 
 ---
 
-## 🧠 RAG Pipeline
+## 🤖 Agentic RAG Pipeline
 
-The RAG Engine uses a 4-node [LangGraph](https://langchain-ai.github.io/langgraph/) pipeline to process every user query:
+The RAG Engine uses a [LangGraph](https://langchain-ai.github.io/langgraph/) **ReAct Agent** that autonomously decides which tools to call based on the user's query:
 
 ```
-User Query → [Parse] → [Retrieve] → [Rank] → [Respond] → {ai_response, product_ids}
+User Query → [ReAct Agent] ⟳ [Tool Calls] → {ai_response, product_ids}
+                  ↕                ↕
+          Decides action    Executes tool
+          Observes result   Loops if needed
 ```
 
-| Node         | What it does                                                                                                                                    |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Parse**    | Extracts structured exact-match metadata filters (brand, type, subtype, price range) from the query using the LLM                               |
-| **Retrieve** | Embeds the query → searches Qdrant with exact metadata filters (strict match) and semantic scoring (0.3 threshold) → falls back to Postgres SQL |
-| **Rank**     | Caps results at 10 and classifies the outcome (shortage / overflow / empty / normal)                                                            |
-| **Respond**  | Drafts a conversational AI response via the LLM, with resilient JSON fallback if offline                                                        |
+### Agent Tools
 
-### Inventory & Pagination Rules
+| Tool                    | What it does                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **product_search_tool** | Embeds the query → searches Qdrant with metadata filters → falls back to Postgres SQL → returns product list  |
+| **calculator_tool**     | Safely evaluates mathematical expressions (discounts, totals, tax, comparisons)                               |
 
-- **Default:** Maximum 10 products per response.
-- **Shortage:** Fewer matches than requested — acknowledges the limited selection.
-- **Overflow:** More matches than the cap — shows the top results and offers to show more.
-- **Empty:** No matches — suggests broadening the search.
+### Dynamic LLM Selection
+
+The frontend provides a dropdown to switch between LLM providers at runtime. These labels are configured dynamically via the `.env` file:
+
+| Provider                | Model           | Notes                                           |
+| ----------------------- | --------------- | ----------------------------------------------- |
+| **Local (Llama 3.2)**   | Meta Llama 3.2  | Runs on Ollama inside Docker, no API key needed |
+| **Cloud (Groq Llama 3.1)** | Meta Llama 3.1 8B | Free cloud API via Groq, requires API key       |
+
+### Performance Optimizations
+
+- **LRU Caching:** High-cost operations such as querying the HuggingFace embedding model in the `product_search_tool` and instantiating LangChain LLM classes are memory-cached via `@lru_cache`, drastically improving speed on repeated queries.
+- **Failover Mechanisms:** If `Qdrant` goes offline, the agent explicitly catches the exception and falls back to searching via the `PostgreSQL` instance gracefully.
 
 ---
 
@@ -156,8 +167,9 @@ The system automatically detects and uses the best available compute hardware:
 | --------------- | ----------------------------------------------- |
 | Frontend        | Gradio 6+                                       |
 | API Gateway     | FastAPI, SQLAlchemy, Alembic                    |
-| RAG Engine      | LangGraph, Sentence-Transformers, Qdrant Client |
-| LLM             | Ollama (Microsoft Phi-3), OpenAI-compatible API |
+| RAG Engine      | LangGraph, LangChain Core, Sentence-Transformers|
+| LLM (Local)     | Ollama (Llama 3.2 3B)                           |
+| LLM (Cloud)     | Groq API (Llama 3.1 8B)                         |
 | Database        | PostgreSQL 17                                   |
 | Vector Database | Qdrant                                          |
 | Dependencies    | Poetry                                          |

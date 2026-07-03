@@ -19,6 +19,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 RAG_ENGINE_URL = os.getenv("RAG_ENGINE_URL", "http://localhost:8002")
+LOCAL_MODEL_LABEL = os.getenv("LOCAL_MODEL_LABEL", "Local (Llama 3.2)")
+
 
 app = FastAPI(title="E-Commerce AI System Gateway")
 
@@ -61,7 +63,12 @@ def get_chat_history(session_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/api/search", response_model=SearchResponse)
-def search(query: str = Query(...), session_id: str = Query(...), db: Session = Depends(get_db)):
+def search(
+    query: str = Query(...),
+    session_id: str = Query(...),
+    llm_provider: str = Query(LOCAL_MODEL_LABEL),
+    db: Session = Depends(get_db),
+):
     """
     Processes a user search query through the following steps:
       1. Logs the user query into chat history.
@@ -99,7 +106,8 @@ def search(query: str = Query(...), session_id: str = Query(...), db: Session = 
                 json={
                     "query": query, 
                     "session_id": session_id,
-                    "chat_history": chat_history
+                    "chat_history": chat_history,
+                    "llm_provider": llm_provider,
                 },
                 timeout=httpx.Timeout(connect=5.0, read=120.0, write=5.0, pool=5.0),
             )

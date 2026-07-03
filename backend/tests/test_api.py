@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 from unittest.mock import patch, Mock
 import uuid
 
-from app.main import app as fastapi_app
+from app.main import app as fastapi_app, LOCAL_MODEL_LABEL
 from app.database import get_db
 from app.models import Base
 
@@ -63,9 +63,14 @@ def test_search_with_rag_engine():
     }
     mock_response.raise_for_status = Mock()
     
-    with patch("httpx.post", return_value=mock_response):
+    with patch("httpx.post", return_value=mock_response) as mock_post:
         response = client.get(f"/api/search?query=running+shoes&session_id={test_session_id}")
         assert response.status_code == 200
+        
+        # Verify the RAG engine was called with the correct default llm_provider
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["json"]["llm_provider"] == LOCAL_MODEL_LABEL
+        
         data = response.json()
         
         assert data["ai_response"] == "Here are some great products for you!"

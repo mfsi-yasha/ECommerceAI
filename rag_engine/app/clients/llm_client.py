@@ -1,9 +1,71 @@
 import logging
-import json
 import httpx
-from ..config import LLM_BASE_URL, LLM_MODEL
+from functools import lru_cache
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from ..config import (
+    LLM_BASE_URL, 
+    LLM_MODEL, 
+    GROQ_API_KEY, 
+    GROQ_MODEL, 
+    LOCAL_MODEL_LABEL, 
+    CLOUD_MODEL_LABEL
+)
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=2)
+def get_llm(provider: str) -> BaseChatModel:
+    """
+    Factory function: returns the appropriate LangChain ChatModel.
+
+    Args:
+        provider: The requested LLM provider label.
+
+    Returns:
+        A LangChain ChatModel instance ready for tool binding.
+    """
+    # Fallback if an empty provider is somehow passed
+    if not provider:
+        provider = LOCAL_MODEL_LABEL
+
+    if CLOUD_MODEL_LABEL in provider or "groq" in provider.lower():
+        if not GROQ_API_KEY:
+            logger.warning("GROQ_API_KEY not set. Falling back to local Ollama.")
+            return _get_ollama_llm()
+        return _get_groq_llm()
+    else:
+        return _get_ollama_llm()
+
+
+def _get_groq_llm() -> BaseChatModel:
+    """Return a ChatGroq instance pointed at the free Groq cloud API."""
+    from langchain_groq import ChatGroq
+
+    logger.info(f"Using Groq cloud LLM: {GROQ_MODEL}")
+    return ChatGroq(
+        model=GROQ_MODEL,
+        api_key=GROQ_API_KEY,
+        temperature=0.3,
+        max_tokens=1024,
+    )
+
+
+def _get_ollama_llm() -> BaseChatModel:
+    """Return a ChatOllama instance pointed at the local Ollama server."""
+    from langchain_ollama import ChatOllama
+
+    logger.info(f"Using local Ollama LLM: {LLM_MODEL} at {LLM_BASE_URL}")
+    return ChatOllama(
+        model=LLM_MODEL,
+        base_url=LLM_BASE_URL,
+        temperature=0.3,
+        num_predict=500,
+        num_ctx=1024,
+    )
+
+
 
 
 def pull_model(model: str | None = None) -> bool:
@@ -43,47 +105,3 @@ def check_model_available() -> bool:
         return any(m.get("name", "").startswith(LLM_MODEL) for m in models)
     except Exception:
         return False
-
-
-def generate_response(prompt: str, system_prompt: str | None = None, json_mode: bool = False) -> str | None:
-    """
-    Generate a chat completion via the OpenAI-compatible endpoint.
-    Returns the assistant message text, or None on failure (triggers template fallback).
-    """
-    messages: list[dict] = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    payload = {
-        "model": LLM_MODEL,
-        "messages": messages,
-        "stream": False,
-        "options": {
-            "temperature": 0.1 if json_mode else 0.7,
-            "num_predict": 500,
-            "num_ctx": 1024
-        }
-    }
-    
-    if json_mode:
-        payload["format"] = "json"
-
-    try:
-        response = httpx.post(
-            f"{LLM_BASE_URL}/api/chat",
-            json=payload,
-            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["message"]["content"]
-    except httpx.ConnectError:
-        logger.warning("LLM server not available. Using template fallback.")
-        return None
-    except httpx.TimeoutException:
-        logger.warning("LLM request timed out. Using template fallback.")
-        return None
-    except Exception as e:
-        logger.error(f"LLM generation error: {e}")
-        return None

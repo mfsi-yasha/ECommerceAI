@@ -2,10 +2,12 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from langchain_core.messages import HumanMessage, AIMessage
 
-from .graph import build_graph, RAGState
+from .graph import build_agent
 from .clients.llm_client import pull_model, check_model_available
 from .clients.qdrant_client import ensure_collection
+from .config import LOCAL_MODEL_LABEL
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,13 +15,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-_graph = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle hook."""
-    global _graph
     logger.info("═══ RAG Engine starting up ═══")
 
     try:
@@ -32,8 +31,6 @@ async def lifespan(app: FastAPI):
         pull_model()
     else:
         logger.info("LLM model already available.")
-
-    _graph = build_graph()
 
     logger.info("═══ RAG Engine ready ═══")
     yield
@@ -48,6 +45,8 @@ class RAGQueryRequest(BaseModel):
     query: str
     session_id: str
     chat_history: list[dict] = []
+    llm_provider: str = LOCAL_MODEL_LABEL
+
 
 class RAGQueryResponse(BaseModel):
     """
@@ -63,42 +62,85 @@ def health_check():
     """Health probe for Docker and the Gateway."""
     return {"status": "healthy", "service": "rag_engine"}
 
+
+def _extract_product_ids(text: str) -> list[int]:
+    """
+    Extract product IDs from the agent's tool output.
+    The product_search_tool embeds IDs as [ID:123] in its output.
+    """
+    import re
+    return [int(m) for m in re.findall(r"\[ID:(\d+)\]", text)]
+
+
 @app.post("/rag/query", response_model=RAGQueryResponse)
 def rag_query(request: RAGQueryRequest):
     """
-    Process a user query through the LangGraph RAG pipeline.
+    Process a user query through the ReAct Agent.
+    The agent autonomously decides which tools to call.
     Returns {ai_response, product_ids} — nothing more.
     """
-    logger.info(f"Incoming query: '{request.query}' (session={request.session_id})")
-
-    if _graph is None:
-        raise HTTPException(status_code=503, detail="RAG Engine is still initialising")
-
-    initial_state: RAGState = {
-        "query": request.query,
-        "session_id": request.session_id,
-        "chat_history": request.chat_history,
-        "intent": "search",
-        "search_query": request.query,
-        "filters": {},
-        "offset": 0,
-        "requested_count": 10,
-        "candidate_ids": [],
-        "product_context": [],
-        "total_matches": 0,
-        "product_ids": [],
-        "scenario": "",
-        "ai_response": "",
-    }
-
-    result = _graph.invoke(initial_state)
-
     logger.info(
-        f"Pipeline complete — scenario={result['scenario']}, "
-        f"ids={result['product_ids']}"
+        f"Incoming query: '{request.query}' "
+        f"(session={request.session_id}, provider={request.llm_provider})"
     )
 
-    return RAGQueryResponse(
-        ai_response=result["ai_response"],
-        product_ids=result["product_ids"],
-    )
+    try:
+        # Build a fresh agent for the selected provider
+        agent = build_agent(request.llm_provider)
+
+        # Convert chat history into LangChain message objects
+        messages = []
+        for msg in request.chat_history[-6:]:
+            content = msg.get("message", "")
+            if msg.get("role") in ("user",):
+                messages.append(HumanMessage(content=content))
+            elif msg.get("role") in ("assistant", "agent"):
+                # Truncate long assistant messages for context window efficiency
+                if len(content) > 200:
+                    content = content[:200] + "... [truncated]"
+                messages.append(AIMessage(content=content))
+
+        messages.append(HumanMessage(content=request.query))
+
+        result = agent.invoke({"messages": messages})
+
+        agent_messages = result.get("messages", [])
+        ai_response = ""
+        all_tool_output = ""
+
+        for msg in agent_messages:
+            if hasattr(msg, "type"):
+                if msg.type == "ai" and msg.content:
+                    ai_response = msg.content
+                elif msg.type == "tool" and msg.content:
+                    all_tool_output += msg.content + "\n"
+
+        product_ids = _extract_product_ids(all_tool_output)
+
+        if not ai_response:
+            ai_response = "I'm here to help with your shopping or any questions you have!"
+
+        import re
+        ai_response = re.sub(r"\s*\[ID:\d+\]", "", ai_response).strip()
+
+        logger.info(
+            f"Agent complete — product_ids={product_ids}, "
+            f"response_preview={ai_response[:100]}..."
+        )
+
+        return RAGQueryResponse(
+            ai_response=ai_response,
+            product_ids=product_ids,
+        )
+
+    except Exception as e:
+        logger.error(f"Agent execution error: {e}", exc_info=True)
+
+        # Graceful fallback
+        return RAGQueryResponse(
+            ai_response=(
+                "I'm having trouble processing your request right now. "
+                "Please try again in a moment!"
+            ),
+            product_ids=[],
+        )

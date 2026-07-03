@@ -22,3 +22,8 @@ LLM_BASE_URL = f"http://{LLM_HOST}:{LLM_PORT}"
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 EMBEDDING_DIM = 384  # Dimension for all-MiniLM-L6-v2
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+LOCAL_MODEL_LABEL = os.getenv("LOCAL_MODEL_LABEL", "Local (Llama 3.2)")
+CLOUD_MODEL_LABEL = os.getenv("CLOUD_MODEL_LABEL", "Cloud (Groq Llama 3.1)")
